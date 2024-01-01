@@ -57,8 +57,8 @@ static void parse_encoded_subject(struct mailimf_subject *subject) {
     }
 
     char charset[charset_len];
-    char encoded[encoded_len];
     char encoding[encoding_len];
+    char encoded[encoded_len];
 
     int charset_visit = 0;
     int encoding_visit = 0;
@@ -72,16 +72,13 @@ static void parse_encoded_subject(struct mailimf_subject *subject) {
         } 
         switch (qmcount) {
             case 1:
-                charset[charset_visit] = subject->sbj_value[i];
-                charset_visit++;
+                charset[charset_visit++] = subject->sbj_value[i];
                 break;
             case 2:
-                encoding[encoding_visit] = subject->sbj_value[i];
-                encoding_visit++;
+                encoding[encoding_visit++] = subject->sbj_value[i];
                 break;
             case 3:
-                encoded[encoded_visit] = subject->sbj_value[i];
-                encoded_visit++;
+                encoded[encoded_visit++] = subject->sbj_value[i];
                 break;
             default:
                 break;
