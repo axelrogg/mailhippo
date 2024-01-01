@@ -1,29 +1,96 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <libetpan/libetpan.h>
 
 static void check_error(int result, char *msg) {
-    if (result == MAILIMAP_NO_ERROR) {
-        return;
+    switch (result) {
+        // IMAP
+        case MAILIMAP_NO_ERROR:
+            return;
+        case MAILIMAP_NO_ERROR_AUTHENTICATED:
+            return;
+        case MAILIMAP_NO_ERROR_NON_AUTHENTICATED:
+            return;
+        default:
+            fprintf(stderr, "Unknown error: %s\n", msg);
+            exit(EXIT_FAILURE);
     }
-    if (result == MAILIMAP_NO_ERROR_AUTHENTICATED) {
-        return;
-    }
-    if (result == MAILIMAP_NO_ERROR_NON_AUTHENTICATED) {
-        return;
-    }
-
-    fprintf(stderr, "Unknown error: %s\n", msg);
-    exit(EXIT_FAILURE);
 }
 
-static void display_subject(struct mailimf_subject * subject) {
-    printf("%s", subject->sbj_value);
+static void display_subject(struct mailimf_subject *subject) {
+    printf("%s\n", subject->sbj_value);
 }
 
-static void display_field(struct mailimf_field *field)
-{
+static void parse_encoded_subject(struct mailimf_subject *subject) {
+    if (subject->sbj_value[0] != '=') {
+        printf("'%s'", subject->sbj_value);
+        return;
+    }
+
+    size_t subject_size    = strlen(subject->sbj_value);
+    int    qmcount = 0;  // Question mark count
+
+    int charset_len  = 0;
+    int encoding_len = 0;
+    int encoded_len  = 0;
+
+    for (int i = 1; i < subject_size - 1; i++) {
+        if (subject->sbj_value[i] == '?') {
+            qmcount++;
+            continue;
+        } 
+        switch (qmcount) {
+        case 1:
+            charset_len++;
+            break;
+        case 2:
+            encoding_len++;
+            break;
+        case 3:
+            encoded_len++;
+            break;
+        default:
+            break;
+        }
+    }
+
+    char charset[charset_len];
+    char encoded[encoded_len];
+    char encoding[encoding_len];
+
+    int charset_visit = 0;
+    int encoding_visit = 0;
+    int encoded_visit = 0;
+
+    qmcount = 0;
+    for (int i = 1; i < subject_size - 1; i++) {
+        if (subject->sbj_value[i] == '?') {
+            qmcount++;
+            continue;
+        } 
+        switch (qmcount) {
+            case 1:
+                charset[charset_visit] = subject->sbj_value[i];
+                charset_visit++;
+                break;
+            case 2:
+                encoding[encoding_visit] = subject->sbj_value[i];
+                encoding_visit++;
+                break;
+            case 3:
+                encoded[encoded_visit] = subject->sbj_value[i];
+                encoded_visit++;
+                break;
+            default:
+                break;
+        }
+    }
+    printf("%s", encoded);
+}
+
+static void display_field(struct mailimf_field *field) {
     switch (field->fld_type) {
         case MAILIMF_FIELD_ORIG_DATE:
             // printf("Date: ");
@@ -47,24 +114,24 @@ static void display_field(struct mailimf_field *field)
             break;
         case MAILIMF_FIELD_SUBJECT:
             printf("Subject: ");
-            display_subject(field->fld_data.fld_subject);
+            parse_encoded_subject(field->fld_data.fld_subject);
             printf("\n");
             break;
         case MAILIMF_FIELD_MESSAGE_ID:
-            printf("Message-ID: %s\n", field->fld_data.fld_message_id->mid_value);
+            // printf("Message-ID: %s\n", field->fld_data.fld_message_id->mid_value);
             break;
     }
 }
 
-static void display_fields(struct mailimf_fields *fields)
-{
+static void display_fields(struct mailimf_fields *fields) {
     clistiter *cur;
 
-    for (cur = clist_begin(fields->fld_list); cur != NULL; cur = clist_next(cur)) {
-        struct mailimf_field *f;
-
-        f = clist_content(cur);
-        display_field(f);
+    cur = clist_begin(fields->fld_list);
+    while (cur != NULL) {
+        struct mailimf_field *field;
+        field = clist_content(cur);
+        display_field(field);
+        cur = clist_next(cur);
     }
 }
 
@@ -107,9 +174,9 @@ static void display_mime(struct mailmime *mime) {
         case MAILMIME_MESSAGE:
             if (mime->mm_data.mm_message.mm_fields) {
                 if (clist_begin(mime->mm_data.mm_message.mm_fields->fld_list) != NULL) {
-                    printf("headers begin\n");
+                    printf("----headers begin----\n");
                     display_fields(mime->mm_data.mm_message.mm_fields);
-                    printf("headers end\n");
+                    printf("----headers end----\n");
                 }
 
                 //if (mime->mm_data.mm_message.mm_msg_mime != NULL) {
@@ -143,31 +210,34 @@ static char *get_msg_att_msg_content(struct mailimap_msg_att *msg_att, size_t *p
     return NULL;
 }
 
-static char *get_msg_content(clist *fetch_result, size_t *p_msg_size) {
+static char *get_message_content(clist *fetch_result, size_t *p_msg_size) {
     clistiter *cur;
 
     // for each message (there will probably be only one message)
-    for(cur = clist_begin(fetch_result) ; cur != NULL ; cur = clist_next(cur)) {
+    cur = clist_begin(fetch_result);
+    while (cur != NULL) {
         struct mailimap_msg_att *msg_att;
         size_t msg_size;
         char *msg_content;
         int mime_result;
-        struct mailmime *mime;
-        size_t current_mime_index = 0;
 
         msg_att = clist_content(cur);
         msg_content = get_msg_att_msg_content(msg_att, &msg_size);
         if (msg_content == NULL) {
+            cur = clist_next(cur);
             continue;
         }
         *p_msg_size = msg_size;
+
+        // Get MIME info from message content
+        struct mailmime *mime;
+        size_t current_mime_index = 0;
+
         mime_result = mailmime_parse(msg_content, msg_size, &current_mime_index, &mime);
-        if (mime_result != MAILIMF_NO_ERROR) {
-            printf("MIME error %d\n", mime_result);
-            continue;
-        }
+        check_error(mime_result, "could not parse MIME info");
+
         display_mime(mime);
-        printf("Message length: %li\n", msg_size);
+        cur = clist_next(cur);
         return msg_content;
     }
     return NULL;
@@ -176,7 +246,7 @@ static char *get_msg_content(clist *fetch_result, size_t *p_msg_size) {
 static void fetch_msg(struct mailimap *imap, uint32_t uid) {
     struct mailimap_set *set;
     struct mailimap_section *section;
-    char filename[512];
+    // char filename[512];
     size_t msg_len;
     char *msg_content;
     char *msg_subject;
@@ -187,12 +257,12 @@ static void fetch_msg(struct mailimap *imap, uint32_t uid) {
     struct stat stat_info;
     struct mailimap_msg_att *att;
 
-    result = stat(filename, &stat_info);
-    if (result == 0) {
-        // already cached
-        printf("%u is already fetched\n", (unsigned int) uid);
-        return;
-    }
+    // result = stat(filename, &stat_info);
+    // if (result == 0) {
+    //     // already cached
+    //     printf("%u is already fetched\n", (unsigned int) uid);
+    //     return;
+    // }
 
     set = mailimap_set_new_single(uid);
     fetch_type = mailimap_fetch_type_new_fetch_att_list_empty();
@@ -205,7 +275,7 @@ static void fetch_msg(struct mailimap *imap, uint32_t uid) {
     check_error(result, "could not fetch");
     printf("fetch %u\n", (unsigned int) uid);
 
-    msg_content = get_msg_content(fetch_result, &msg_len);
+    msg_content = get_message_content(fetch_result, &msg_len);
     if (msg_content == NULL) {
         fprintf(stderr, "no content\n");
         mailimap_fetch_list_free(fetch_result);
@@ -213,7 +283,7 @@ static void fetch_msg(struct mailimap *imap, uint32_t uid) {
     }
 
     // printf("FOUND: %s", msg_content);
-    printf("%u has been fetched\n", (unsigned int) uid);
+    // printf("%u has been fetched\n", (unsigned int) uid);
 
     mailimap_fetch_list_free(fetch_result);
 }
@@ -222,7 +292,7 @@ static uint32_t get_uid(struct mailimap_msg_att *msg_att) {
     clistiter *cur;
 
     // Iterate on each result of one given message
-    for(cur = clist_begin(msg_att->att_list) ; cur != NULL ; cur = clist_next(cur)) {
+    for (cur = clist_begin(msg_att->att_list); cur != NULL; cur = clist_next(cur)) {
         struct mailimap_msg_att_item *item;
         item = clist_content(cur);
         if (item->att_type != MAILIMAP_MSG_ATT_ITEM_STATIC) {
