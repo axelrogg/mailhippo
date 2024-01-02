@@ -331,7 +331,11 @@ static void fetch_messages(struct mailimap *imap) {
     check_error(result, "could not fetch");
 
     cur = clist_begin(fetch_result);
-    while(cur != NULL) {
+    int i = 0;
+    while (cur != NULL) {
+        if (i > 1) {
+            break;
+        }
         struct mailimap_msg_att *msg_att;
         uint32_t uid;
 
@@ -342,6 +346,7 @@ static void fetch_messages(struct mailimap *imap) {
         fetch_msg(imap, uid);
 
         cur = clist_next(cur);
+        i++;
     }
     mailimap_fetch_list_free(fetch_result);
 }
@@ -352,8 +357,6 @@ int main(void) {
 
     char *imap_ssl_host = "imap.gmail.com";
     uint16_t imap_ssl_port = 993;
-    char *username = "axelrogg12@gmail.com";
-    char *password = "peah ctsj zblp kexx";
 
     imap = mailimap_new(0, NULL);
     result = mailimap_ssl_connect(imap, imap_ssl_host, imap_ssl_port);
